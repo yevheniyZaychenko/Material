@@ -309,13 +309,13 @@ open class TabBar: Bar {
 	}
     
     private func updateSelectionLine() {
-        for b in buttons {
-            b.grid.columns = 0
-            b.cornerRadius = 0
-            b.contentEdgeInsets = .zero
+        for v in buttons {
+            v.grid.columns = 0
+            v.cornerRadius = 0
+            v.contentEdgeInsets = .zero
 
             if isLineAnimated {
-                prepareLineAnimationHandler(button: b)
+                prepareLineAnimationHandler(button: v)
             }
         }
         

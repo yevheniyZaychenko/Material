@@ -79,6 +79,21 @@ extension UIViewController {
 }
 
 open class TabsController: UIViewController {
+    fileprivate enum PanTransitionState {
+        case normal
+        case slidingLeft
+        case slidingRight
+    }
+    
+    /// A reference to the pan gesture recognizer.
+    fileprivate var panGestureRecognizer: UIPanGestureRecognizer!
+    
+    /// The pan transition state.
+    fileprivate var panTransitionState: PanTransitionState = .normal
+    
+    /// A reference to the loading index within the view controllers.
+    fileprivate var loadingIndex: Int?
+    
     /// The TabBar used to switch between view controllers.
     @IBInspectable
     open let tabBar = TabBar()
@@ -164,6 +179,8 @@ open class TabsController: UIViewController {
     open func prepare() {
         view.backgroundColor = .white
         view.contentScaleFactor = Screen.scale
+        
+        preparePanGestureRecognizer()
         prepareContainer()
         prepareTabBar()
         prepareViewControllers()
@@ -171,6 +188,12 @@ open class TabsController: UIViewController {
 }
 
 fileprivate extension TabsController {
+    /// A pan genture recognizer for transitioning between view controllers.
+    func preparePanGestureRecognizer() {
+        panGestureRecognizer = UIPanGestureRecognizer(target: self, action: #selector(handlePanGestureRecognizer(gestureRecognizer:)))
+        view.addGestureRecognizer(panGestureRecognizer)
+    }
+    
     /**
      Prepares the tabBar buttons.
      - Parameter _ buttons: An Array of UIButtons.
@@ -234,6 +257,7 @@ fileprivate extension TabsController {
         vc.didMove(toParentViewController: self)
         vc.view.clipsToBounds = true
         vc.view.contentScaleFactor = Screen.scale
+        vc.view.frame = container.bounds
         container.addSubview(vc.view)
     }
 }
@@ -326,13 +350,104 @@ fileprivate extension TabsController {
         }
         
         let fvc = viewControllers[selectedIndex]
+        fvc.view.transition([])
+        
         let tvc = viewControllers[i]
         
         tvc.view.frame.size = container.bounds.size
         tvc.motionModalTransitionType = motionTransitionType
+        tvc.view.transition([])
         
-        Motion.shared.transition(from: fvc, to: tvc, in: container)
-
-        selectedIndex = i
+        view.isUserInteractionEnabled = false
+        Motion.shared.transition(from: fvc, to: tvc, in: container) { [weak self, i = i] (isFinished) in
+            guard isFinished else {
+                return
+            }
+            
+            self?.selectedIndex = i
+            self?.view.isUserInteractionEnabled = true
+        }
+    }
+    
+    /**
+     Handles the pan gesture recognizer.
+     - Parameter gestureRecognizer: A UIPanGestureRecognizer.
+     */
+    @objc
+    func handlePanGestureRecognizer(gestureRecognizer: UIPanGestureRecognizer) {
+        let tx = panGestureRecognizer.translation(in: nil).x
+        let vx = panGestureRecognizer.velocity(in: nil).x
+        
+        let fvc = viewControllers[selectedIndex]
+        
+        switch panGestureRecognizer.state {
+        case .began, .changed:
+            let nextState: PanTransitionState
+            
+            if .normal == panTransitionState {
+                nextState = vx < 0 ? .slidingLeft : .slidingRight
+            } else {
+                nextState = tx < 0 ? .slidingLeft : .slidingRight
+            }
+            
+            if nextState != panTransitionState {
+                Motion.shared.cancel(isAnimated: false)
+                
+                if nil == loadingIndex {
+                    loadingIndex = (selectedIndex + (.slidingLeft == nextState ? 1 : viewControllers.count - 1)) % viewControllers.count
+                }
+                
+                guard let i = loadingIndex, -1 < i && i < viewControllers.count else {
+                    loadingIndex = nil
+                    return
+                }
+                
+                let tvc = viewControllers[i]
+                
+                if nextState == .slidingLeft {
+                    fvc.view.transition([])
+                    tvc.view.transition(.translate(x: container.bounds.width))
+                } else {
+                    fvc.view.transition(.translate(x: container.bounds.width))
+                    tvc.view.transition([])
+                }
+                
+                panTransitionState = nextState
+                
+                Motion.shared.transition(from: fvc, to: tvc, in: container) { [weak self, i = i] (isFinished) in
+                    guard isFinished else {
+                        return
+                    }
+                    
+                    self?.selectedIndex = i
+                }
+            } else {
+                let progress = abs(TimeInterval(tx / container.bounds.width))
+                
+                Motion.shared.update(elapsedTime: progress)
+                
+                if .slidingLeft == panTransitionState, let i = loadingIndex {
+                    Motion.shared.apply(transitions: [.translate(x: container.bounds.width + tx)], to: viewControllers[i].view)
+                } else {
+                    Motion.shared.apply(transitions: [.translate(x: tx)], to: fvc.view)
+                }
+            }
+        default:
+            if (0.3 < abs((tx + vx) / container.bounds.width)) {
+                Motion.shared.end()
+            } else {
+                Motion.shared.update(elapsedTime: 0)
+                
+                if .slidingLeft == panTransitionState, let i = loadingIndex {
+                    Motion.shared.apply(transitions: [.translate(x: container.bounds.width)], to: viewControllers[i].view)
+                } else {
+                    Motion.shared.apply(transitions: [.translate(x: 0)], to: fvc.view)
+                }
+                
+            }
+            
+            panTransitionState = .normal
+            loadingIndex = nil
+        }
     }
 }
